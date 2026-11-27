@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow, noarchive" />
 <title>Tether · 任务清单</title>
 
 <script defer src="static/tailwindcss.js"
@@ -152,6 +153,30 @@
 </head>
 
 <body x-data="taskApp()" x-init="init()" @keydown.escape.window="handleEsc()" @keydown.window="onHotkey($event)" @dragover.prevent @drop.prevent x-cloak>
+
+<!-- 浏览器模式访问口令（桌面壳不显示） -->
+<div x-show="locked" x-cloak class="fixed inset-0 z-50 flex items-center justify-center px-6"
+     style="background: var(--bg)">
+  <div class="w-full max-w-[300px] rounded-xl border p-6"
+       style="background: var(--card); border-color: var(--line); box-shadow: var(--shadow)">
+    <h2 class="text-[15px] font-semibold" x-text="lockMode === 'setup' ? '设置访问口令' : '输入访问口令'"></h2>
+    <p class="mt-1.5 text-[11.5px] leading-relaxed" style="color: var(--sub)"
+       x-text="lockMode === 'setup'
+         ? '首次在此浏览器打开，请设置一个口令；以后每次打开都需要输入。'
+         : '本页包含案件信息，请输入此前设置的口令。'"></p>
+    <input type="password" class="field mt-4" autofocus
+           :placeholder="lockMode === 'setup' ? '口令（至少 4 位）' : '口令'"
+           x-model="lockInput" @keydown.enter="submitLock()">
+    <input type="password" class="field mt-2" placeholder="再输入一次" x-show="lockMode === 'setup'"
+           x-model="lockInput2" @keydown.enter="submitLock()">
+    <p class="mt-2 text-[11px]" style="color: #b13a3a" x-show="lockError" x-text="lockError"></p>
+    <button type="button" class="btn btn-primary mt-4 w-full" :disabled="lockBusy" @click="submitLock()"
+            x-text="lockBusy ? '处理中…' : (lockMode === 'setup' ? '设置并进入' : '解锁')"></button>
+    <p class="mt-3 text-[10.5px] leading-relaxed" style="color: var(--sub)">
+      口令只存在本浏览器，用于遮挡页面；忘记时可清除本站点数据后重新设置。
+    </p>
+  </div>
+</div>
 <div class="mx-auto w-full max-w-[860px] px-8 pt-10 pb-14">
 
   <!-- 顶部：标题 + 工具 -->
@@ -1920,6 +1945,8 @@ const ACTION_STAGE_MAP = { "返稿": "已返稿", "返交底": "已返交底" };
 const CLOUD_CFG_KEY = "casedock_github_config";
 const CLOUD_DB_KEY = "casedock_browser_db_v2";
 const CLOUD_SETTINGS_KEY = "casedock_browser_settings";
+const CLOUD_LOCK_KEY = "casedock_access_hash";
+const CLOUD_UNLOCK_SESSION = "casedock_unlocked";
 const CLOUD_DEFAULT_PATH = "casedock_data.json";
 const CLOUD_DEFAULT_TEMPLATE = "{person}您好，【{title}】已于 {date} {action}发您，请问目前核对方便吗？该项绝限在 {deadline}，麻烦您抽空确认下~";
 const CLOUD_ACTIVITY_ACTIONS = ["创建任务", "返稿", "返交底", "收到反馈", "其他节点", "提交流程", "完成终稿", "起草/撰写中", "完事退隐"];
@@ -2983,6 +3010,15 @@ function taskApp() {
     ghTesting: false,
     cloudPoll: null,
 
+    // 浏览器模式访问口令
+    locked: false,
+    lockMode: "enter",
+    lockInput: "",
+    lockInput2: "",
+    lockError: "",
+    lockBusy: false,
+    browserDataStarted: false,
+
     roots: [],
     showRoots: false,
     rootsBusy: false,
@@ -3080,6 +3116,7 @@ function taskApp() {
         if (this.booted) return;
         this.booted = true;
         this.isDesktop = desktop;
+        if (!desktop) this.applyLockGate();
         this.startup();
       };
 
@@ -3163,6 +3200,13 @@ function taskApp() {
       this.followupTemplate = CloudStore.settings.follow_up_template || "";
       this.syncCloudState();
       this.loading = false;
+      // 未解锁前不渲染案件数据、不联网
+      if (!this.locked) await this.startBrowserData();
+    },
+
+    async startBrowserData() {
+      if (this.browserDataStarted) return;
+      this.browserDataStarted = true;
       await this.refresh();
       await this.loadRoots();
       if (CloudStore.configured()) {
@@ -3171,6 +3215,78 @@ function taskApp() {
         this.toast("浏览器模式：请先在【设置与工具 → 跨端云同步】中填写私有仓库配置", "ok");
       }
       this.startCloudPolling();
+    },
+
+    /* ---------------- 浏览器访问口令 ---------------- */
+    lockSetupNeeded() {
+      try {
+        return !localStorage.getItem(CLOUD_LOCK_KEY);
+      } catch (err) {
+        return true;
+      }
+    },
+
+    applyLockGate() {
+      let unlocked = false;
+      try {
+        unlocked = sessionStorage.getItem(CLOUD_UNLOCK_SESSION) === "1";
+      } catch (err) {}
+      if (unlocked) return;
+      this.lockMode = this.lockSetupNeeded() ? "setup" : "enter";
+      this.locked = true;
+    },
+
+    async hashLockText(text) {
+      const data = new TextEncoder().encode("casedock::" + text);
+      if (window.crypto && window.crypto.subtle && window.crypto.subtle.digest) {
+        const buf = await window.crypto.subtle.digest("SHA-256", data);
+        return Array.from(new Uint8Array(buf))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+      }
+      let hash = 5381;
+      for (const byte of data) hash = ((hash * 33) ^ byte) >>> 0;
+      return "fallback:" + hash.toString(16);
+    },
+
+    async submitLock() {
+      if (this.lockBusy) return;
+      const text = (this.lockInput || "").trim();
+      if (!text) {
+        this.lockError = "请输入口令";
+        return;
+      }
+      this.lockBusy = true;
+      this.lockError = "";
+      try {
+        if (this.lockMode === "setup") {
+          if (text.length < 4) throw new Error("口令至少 4 位");
+          if (text !== (this.lockInput2 || "").trim()) throw new Error("两次输入不一致");
+          const hash = await this.hashLockText(text);
+          localStorage.setItem(CLOUD_LOCK_KEY, hash);
+          this.finishUnlock();
+        } else {
+          const saved = localStorage.getItem(CLOUD_LOCK_KEY) || "";
+          const hash = await this.hashLockText(text);
+          if (!saved || hash !== saved) throw new Error("口令不正确");
+          this.finishUnlock();
+        }
+      } catch (err) {
+        this.lockError = err.message || "解锁失败";
+      } finally {
+        this.lockBusy = false;
+      }
+    },
+
+    finishUnlock() {
+      try {
+        sessionStorage.setItem(CLOUD_UNLOCK_SESSION, "1");
+      } catch (err) {}
+      this.locked = false;
+      this.lockInput = "";
+      this.lockInput2 = "";
+      this.lockError = "";
+      if (!this.isDesktop && this.booted) this.startBrowserData();
     },
 
     get summary() {
@@ -3598,7 +3714,7 @@ function taskApp() {
       if (this.cloudPoll) clearInterval(this.cloudPoll);
       this.cloudPoll = setInterval(async () => {
         try {
-          if (!this.cloudEnabled) return;
+          if (this.locked || !this.cloudEnabled) return;
           if (!this.isDesktop) {
             if (CloudStore.sync.busy) return;
             const res = await CloudStore.syncNow({ pullOnly: true });
@@ -4098,6 +4214,7 @@ function taskApp() {
       const target = event.target;
       const tag = (target && target.tagName) || "";
       if (["INPUT", "TEXTAREA", "SELECT"].includes(tag) || (target && target.isContentEditable)) return;
+      if (this.locked) return;
       if (this.showReview || this.showStageModal || this.showRoots || this.showArchive || this.showBatchImport) return;
 
       const list = this.visibleTasks;
