@@ -161,21 +161,19 @@
       <p class="mt-1.5 text-[12.5px] leading-relaxed" style="color: var(--sub)" x-text="summary"></p>
     </div>
 
-    <div class="flex flex-wrap items-center gap-2">
-      <div class="flex items-center gap-1.5 rounded-full border px-2 py-1" x-show="cloudEnabled"
+    <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
+      <div class="flex items-center rounded-full border p-[5px]" x-show="cloudEnabled"
            :title="cloudTitle" style="border-color: var(--line)">
         <span class="h-1.5 w-1.5 rounded-full" :style="'background: ' + cloudColor"></span>
-        <span class="text-[10.5px]" style="color: var(--sub)" x-text="cloudLabel"></span>
       </div>
 
-      <button type="button" class="btn" @click="manualSync()" :disabled="syncing" x-show="cloudEnabled"
-              title="立即与 GitHub 私有仓库双向合并同步">
+      <button type="button" class="btn px-2" @click="manualSync()" :disabled="syncing" x-show="cloudEnabled"
+              :title="syncing ? '同步中…' : '立即同步'">
         <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
              stroke-linecap="round" stroke-linejoin="round">
           <path d="M20 11a8 8 0 0 0-14.8-3.6M4 13a8 8 0 0 0 14.8 3.6" />
           <path d="M5 4v4h4M19 20v-4h-4" />
         </svg>
-        <span x-text="syncing ? '同步中…' : '立即同步'"></span>
       </button>
 
       <button type="button" class="btn" @click="runStageScan(true)" :disabled="stageScanning" x-show="isDesktop"
@@ -231,7 +229,7 @@
           <button type="button" class="menu-item" @click="showTools = false; exportBackup()"
                   :disabled="exporting">导出 JSON 备份</button>
           <div class="my-1" style="border-top: 1px solid var(--line)"></div>
-          <button type="button" class="menu-item" @click="showTools = false; openRoots('cloud')" x-show="!isDesktop">跨端云同步</button>
+          <button type="button" class="menu-item" @click="showTools = false; openRoots('cloud')">跨端云同步</button>
           <button type="button" class="menu-item" @click="showTools = false; openRoots('rules')" x-show="isDesktop">识别规则设置</button>
           <button type="button" class="menu-item" @click="showTools = false; openRoots('semantic')" x-show="isDesktop">语义识别</button>
           <button type="button" class="menu-item" @click="showTools = false; resetProcessedCache()" x-show="isDesktop"
